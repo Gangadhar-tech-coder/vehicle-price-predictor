@@ -1,86 +1,85 @@
 import streamlit as st
-import joblib
 import pandas as pd
 import numpy as np
-import base64
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.ensemble import RandomForestRegressor
 
-def set_background_with_overlay(image_file):
-    with open(image_file, "rb") as f:
-        data = f.read()
-    encoded = base64.b64encode(data).decode()
+# Load dataset directly from GitHub folder
+@st.cache_data
+def load_data():
+    return pd.read_csv("dataset.csv")
 
-    st.markdown(
-        f"""
-        <style>
-        .stApp {{
-            background: linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.9)), url("data:image/jpg;base64,{encoded}");
-            background-size: cover;
-            background-repeat: no-repeat;
-            background-attachment: fixed;
-            background-position: center;
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+# Train model inside the app
+@st.cache_resource
+def train_model(df):
+    df = df.dropna(subset=["price"])  # Drop missing target values
+    df = df.drop(columns=["description", "name"])  # Drop unused text fields
 
-# Use this in your app
-set_background_with_overlay("image3.jpg")
+    X = df.drop(columns=["price"])
+    y = df["price"]
 
+    num_features = ["year", "mileage", "cylinders", "doors"]
+    cat_features = [col for col in X.columns if col not in num_features]
 
+    num_pipeline = Pipeline([("imputer", SimpleImputer(strategy="mean"))])
+    cat_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore"))
+    ])
 
-# Page config
-st.set_page_config(
-    page_title="Vehicle Price Predictor",
-    page_icon="🚗",
-    layout="wide"
-)
+    preprocessor = ColumnTransformer([
+        ("num", num_pipeline, num_features),
+        ("cat", cat_pipeline, cat_features)
+    ])
 
-# Load model
-model = joblib.load("vehicle_price_model.pkl")
+    pipeline = Pipeline([
+        ("preprocessor", preprocessor),
+        ("regressor", RandomForestRegressor(n_estimators=100, random_state=42))
+    ])
 
-st.markdown("<h1 style='text-align: center;'>🚗 Vehicle Price Predictor</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: gray;'>Enter vehicle features to estimate its price</p>", unsafe_allow_html=True)
-st.write("---")
+    pipeline.fit(X, y)
+    return pipeline
 
-# --- Section: Input form ---
-with st.form("input_form"):
-    st.subheader("🔧 Vehicle Features")
+# Load and train
+df = load_data()
+model = train_model(df)
 
-    col1, col2, col3 = st.columns(3)
+# ------------------ UI ------------------
+st.set_page_config(page_title="Vehicle Price Predictor", layout="wide")
+st.title("🚗 Vehicle Price Predictor")
+st.markdown("Estimate a car's price based on its specifications")
 
-    with col1:
-        year = st.number_input("Manufacturing Year", min_value=1980, max_value=2025, step=1, value=2022)
-        mileage = st.number_input("Mileage (in miles)", min_value=0.0, value=5000.0)
-        cylinders = st.selectbox("Cylinders", [3, 4, 5, 6, 8, 10, 12], index=3)
-        doors = st.selectbox("Doors", [2, 3, 4], index=2)
+st.write("### 📋 Enter Vehicle Details:")
 
-    with col2:
-        make = st.selectbox("Make", ["Ford", "Toyota", "BMW", "Jeep", "RAM", "Chevrolet", "GMC", "Other"])
-        model_name = st.text_input("Model", placeholder="e.g. Corolla, Yukon XL")
-        trim = st.text_input("Trim Level", placeholder="e.g. Limited, Base")
+col1, col2, col3 = st.columns(3)
 
-    with col3:
-        fuel = st.selectbox("Fuel Type", ["Gasoline", "Diesel", "Electric", "Hybrid", "Other"])
-        transmission = st.selectbox("Transmission", ["Automatic", "Manual", "CVT", "Other"])
-        drivetrain = st.selectbox("Drivetrain", ["All-wheel Drive", "Four-wheel Drive", "Front-wheel Drive", "Rear-wheel Drive", "Other"])
-        body = st.selectbox("Body Style", ["SUV", "Sedan", "Pickup Truck", "Hatchback", "Coupe", "Other"])
+with col1:
+    year = st.number_input("Year", min_value=1980, max_value=2025, value=2022)
+    mileage = st.number_input("Mileage", min_value=0.0, value=10000.0)
+    cylinders = st.selectbox("Cylinders", [3, 4, 5, 6, 8, 10, 12], index=3)
+    doors = st.selectbox("Doors", [2, 3, 4], index=2)
 
-    st.markdown("### 🎨 Appearance Details")
-    col4, col5 = st.columns(2)
-    with col4:
-        exterior_color = st.text_input("Exterior Color", placeholder="e.g. Silver, Red")
-    with col5:
-        interior_color = st.text_input("Interior Color", placeholder="e.g. Black, Beige")
+with col2:
+    make = st.selectbox("Make", sorted(df["make"].dropna().unique().tolist()))
+    model_name = st.text_input("Model", "Corolla")
+    trim = st.text_input("Trim", "Base")
+    fuel = st.selectbox("Fuel", sorted(df["fuel"].dropna().unique().tolist()))
 
-    st.markdown("### ⚙️ Engine Details")
-    engine = st.text_input("Engine Description", placeholder="e.g. 6.2L V8 Turbocharged")
+with col3:
+    transmission = st.selectbox("Transmission", sorted(df["transmission"].dropna().unique().tolist()))
+    drivetrain = st.selectbox("Drivetrain", sorted(df["drivetrain"].dropna().unique().tolist()))
+    body = st.selectbox("Body Style", sorted(df["body"].dropna().unique().tolist()))
+    engine = st.text_input("Engine", "2.0L I4")
 
-    submitted = st.form_submit_button("💲 Predict Price")
+exterior_color = st.text_input("Exterior Color", "Silver")
+interior_color = st.text_input("Interior Color", "Black")
 
-# --- Section: Output ---
-if submitted:
-    input_data = {
+if st.button("💲 Predict Price"):
+    input_data = pd.DataFrame([{
         "year": year,
         "mileage": mileage,
         "cylinders": cylinders,
@@ -92,30 +91,13 @@ if submitted:
         "transmission": transmission,
         "drivetrain": drivetrain,
         "body": body,
+        "engine": engine,
         "exterior_color": exterior_color,
-        "interior_color": interior_color,
-        "engine": engine
-    }
-
-    input_df = pd.DataFrame([input_data])
+        "interior_color": interior_color
+    }])
 
     try:
-        prediction = model.predict(input_df)[0]
-
-        st.success("✅ Prediction Complete!")
-        st.markdown(f"""
-        <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; border: 1px solid #ddd; text-align: center;'>
-            <h2>💰 Estimated Price: <span style='color: #2ecc71;'>${prediction:,.2f}</span></h2>
-        </div>
-        """, unsafe_allow_html=True)
-
+        prediction = model.predict(input_data)[0]
+        st.success(f"💰 Estimated Price: ${prediction:,.2f}")
     except Exception as e:
-        st.error(f"⚠️ Something went wrong: {e}")
-
-# --- Footer ---
-st.markdown("""
-<hr>
-<p style='text-align: center; font-size: 0.9em; color: gray;'>
-    Made with ❤️ using Machine Learning | © 2025 VehiclePredictor.ai
-</p>
-""", unsafe_allow_html=True)
+        st.error(f"Prediction failed: {e}")
